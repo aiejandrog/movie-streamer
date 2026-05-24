@@ -1,18 +1,30 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pathlib import Path
+from contextlib import asynccontextmanager
 
+from app.config import settings
+from app.database import engine
 from app.routers import movies, stream, watchlist, progress, ingest
 
-app = FastAPI(title="MovieVault API", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    # Graceful shutdown: close all DB connections before Railway kills the process
+    await engine.dispose()
+
+
+app = FastAPI(title="MovieVault API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 
 app.include_router(movies.router, prefix="/api/movies", tags=["movies"])
@@ -33,4 +45,10 @@ if static_dir.exists():
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
+        # Never swallow API misses — let FastAPI return proper 404s
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
+        # File requests (e.g. favicon.ico) that don't exist → 404, not SPA
+        if "." in Path(full_path).name:
+            raise HTTPException(status_code=404, detail="Not found")
         return FileResponse(str(static_dir / "index.html"))

@@ -1,5 +1,5 @@
 import uuid
-import shutil
+import aiofiles
 from datetime import datetime
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
@@ -13,6 +13,9 @@ from app.services.file_handler import get_video_duration
 from app.config import settings
 
 router = APIRouter()
+
+ALLOWED_SUFFIXES = {".mp4", ".mkv", ".webm", ".mov", ".avi"}
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024 * 1024  # 50 GB
 
 
 @router.get("/tmdb/search", response_model=list[TMDBSearchResult])
@@ -56,21 +59,36 @@ async def upload_video_file(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
-    movie = await db.get(Movie, movie_id)
+    # Validate movie_id is a proper UUID — prevents path traversal
+    try:
+        safe_id = str(uuid.UUID(movie_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid movie ID")
+
+    movie = await db.get(Movie, safe_id)
     if not movie:
         raise HTTPException(status_code=404, detail="Movie not found")
 
-    allowed_types = {"video/mp4", "video/x-matroska", "video/webm", "video/quicktime"}
-    if file.content_type and file.content_type not in allowed_types:
-        ext = Path(file.filename or "").suffix.lower()
-        if ext not in {".mp4", ".mkv", ".webm", ".mov", ".avi"}:
-            raise HTTPException(status_code=400, detail="Unsupported video format")
+    # Validate extension from filename (don't trust content_type — easily spoofed)
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in ALLOWED_SUFFIXES:
+        raise HTTPException(status_code=400, detail=f"Unsupported format. Allowed: {', '.join(ALLOWED_SUFFIXES)}")
 
-    suffix = Path(file.filename or "video.mp4").suffix
-    dest = settings.videos_path / f"{movie_id}{suffix}"
+    dest = settings.videos_path / f"{safe_id}{suffix}"
 
-    with dest.open("wb") as out:
-        shutil.copyfileobj(file.file, out)
+    # Async chunked write with size cap
+    bytes_written = 0
+    async with aiofiles.open(dest, "wb") as out:
+        while True:
+            chunk = await file.read(1024 * 1024)  # 1 MB at a time
+            if not chunk:
+                break
+            bytes_written += len(chunk)
+            if bytes_written > MAX_UPLOAD_BYTES:
+                await out.close()
+                dest.unlink(missing_ok=True)
+                raise HTTPException(status_code=413, detail="File too large (50 GB max)")
+            await out.write(chunk)
 
     movie.file_path = str(dest)
 
