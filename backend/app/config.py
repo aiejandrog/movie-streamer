@@ -17,6 +17,22 @@ class Settings(BaseSettings):
     api_key: str = ""
 
     @property
+    def async_database_url(self) -> str:
+        """Normalise the DB URL to the asyncpg driver.
+
+        Railway's PostgreSQL plugin provides a plain ``postgresql://`` (or
+        ``postgres://``) URL.  SQLAlchemy's async engine requires the
+        ``+asyncpg`` dialect.  This property handles the conversion so the raw
+        DATABASE_URL env var can be set as-is from the Railway dashboard.
+        """
+        url = self.database_url
+        if url.startswith("postgres://"):
+            url = "postgresql+asyncpg://" + url[len("postgres://"):]
+        elif url.startswith("postgresql://") and "+asyncpg" not in url:
+            url = "postgresql+asyncpg://" + url[len("postgresql://"):]
+        return url
+
+    @property
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
 
