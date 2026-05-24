@@ -1,6 +1,11 @@
 import axios from 'axios'
 
-const api = axios.create({ baseURL: '/api' })
+const api = axios.create({
+  baseURL: '/api',
+  headers: import.meta.env.VITE_API_KEY
+    ? { 'X-API-Key': import.meta.env.VITE_API_KEY }
+    : {},
+})
 
 export const getMovies = (params) => api.get('/movies', { params })
 export const getMovie = (id) => api.get(`/movies/${id}`)
