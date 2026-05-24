@@ -1,7 +1,7 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -26,6 +26,19 @@ app.add_middleware(
     allow_headers=["*"],
     allow_credentials=True,
 )
+
+@app.middleware("http")
+async def api_key_check(request: Request, call_next):
+    """Optional API key protection. Only active when API_KEY is set in env.
+    Set API_KEY in Railway dashboard for instant production protection.
+    Health check is always exempt so Railway monitoring still works.
+    """
+    if settings.api_key and request.url.path.startswith("/api/") and request.url.path != "/api/health":
+        key = request.headers.get("X-API-Key")
+        if key != settings.api_key:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    return await call_next(request)
+
 
 app.include_router(movies.router, prefix="/api/movies", tags=["movies"])
 app.include_router(stream.router, prefix="/api/stream", tags=["stream"])
